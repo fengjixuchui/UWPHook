@@ -125,7 +125,7 @@ namespace UWPHook
         private void BwrSave_DoWork(object sender, DoWorkEventArgs e)
         {
             string steam_folder = SteamManager.GetSteamFolder();
-            if (!String.IsNullOrEmpty(steam_folder))
+            if (Directory.Exists(steam_folder))
             {
                 var users = SteamManager.GetUsers(steam_folder);
                 var selected_apps = Apps.Entries.Where(app => app.Selected);
@@ -169,7 +169,10 @@ namespace UWPHook
                                     IsHidden = 0,
                                     OpenVR = 0,
                                     ShortcutPath = "",
-                                    Tags = new string[0]
+                                    Tags = new string[0],
+                                    LaunchOptions = "",
+                                    AllowOverlay = 1,
+                                    LastPlayTime = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                                 };
 
                                 //Resize this array so it fits the new entries
@@ -179,6 +182,10 @@ namespace UWPHook
 
                             try
                             {
+                                if (!Directory.Exists(user + @"\\config\\"))
+                                {
+                                    Directory.CreateDirectory(user + @"\\config\\");
+                                }
                                 //Write the file with all the shortcuts
                                 File.WriteAllBytes(user + @"\\config\\shortcuts.vdf", VDFSerializer.Serialize(shortcuts));
                             }
