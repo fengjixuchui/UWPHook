@@ -96,7 +96,7 @@ namespace UWPHook
             {
                 if (Properties.Settings.Default.ChangeLanguage && !String.IsNullOrEmpty(Properties.Settings.Default.TargetLanguage))
                 {
-                    ScriptManager.RunScript("Set - WinUILanguageOverride " + currentLanguage);
+                    ScriptManager.RunScript("Set-WinUILanguageOverride " + currentLanguage);
                 }
 
                 //The user has probably finished using the app, so let's close UWPHook to keep the experience clean 
@@ -156,22 +156,26 @@ namespace UWPHook
 
                         if (shortcuts != null)
                         {
+                            var exePath = @"""" + System.Reflection.Assembly.GetExecutingAssembly().Location + @"""";
+                            var exeDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
                             foreach (var app in selected_apps)
                             {
                                 VDFEntry newApp = new VDFEntry()
                                 {
                                     AppName = app.Name,
-                                    Exe = @"""" + System.Reflection.Assembly.GetExecutingAssembly().Location + @""" " + app.Aumid,
-                                    StartDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),
+                                    Exe = exePath,
+                                    StartDir = exeDir,
+                                    LaunchOptions = app.Aumid,
                                     AllowDesktopConfig = 1,
+                                    AllowOverlay = 1,
                                     Icon = app.Icon,
                                     Index = shortcuts.Length,
                                     IsHidden = 0,
                                     OpenVR = 0,
                                     ShortcutPath = "",
                                     Tags = new string[0],
-                                    LaunchOptions = "",
-                                    AllowOverlay = 1,
+                                    Devkit = 0,
+                                    DevkitGameID = "",
                                     LastPlayTime = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                                 };
 
