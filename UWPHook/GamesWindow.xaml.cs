@@ -13,6 +13,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using UWPHook.Properties;
 using UWPHook.SteamGridDb;
 using VDFParser;
 using VDFParser.Models;
@@ -25,20 +26,21 @@ namespace UWPHook
     public partial class GamesWindow : Window
     {
         AppEntryModel Apps;
-        BackgroundWorker bwrLoad, bwrSave;
+        BackgroundWorker bwrLoad;
 
         public GamesWindow()
         {
             InitializeComponent();
             Apps = new AppEntryModel();
+            var args = Environment.GetCommandLineArgs();
 
             //If null or 1, the app was launched normally
-            if (Environment.GetCommandLineArgs() != null)
+            if (args != null)
             {
                 //When length is 1, the only argument is the path where the app is installed
                 if (Environment.GetCommandLineArgs().Length > 1)
                 {
-                    LauncherAsync();
+                    _ = LauncherAsync(args);
                 }
             }
         }
@@ -52,11 +54,11 @@ namespace UWPHook
             await Task.Delay(10000);
         }
 
-        private async Task LauncherAsync()
+        private async Task LauncherAsync(string[] args)
         {
             FullScreenLauncher launcher = null;
             //So, for some reason, Steam is now stopping in-home streaming if the launched app is minimized, so not hiding UWPHook's window is doing the trick for now
-            if (Properties.Settings.Default.StreamMode)
+            if (Settings.Default.StreamMode)
             {
                 this.Hide();
                 launcher = new FullScreenLauncher();
@@ -79,18 +81,18 @@ namespace UWPHook
             {
                 //Some apps have their language locked to the UI language of the system, so overriding it might change the language of the game
                 //I my self couldn't get this to work on neither Forza Horizon 3 or Halo 5 Forge, @AbGedreht reported it works tho
-                if (Properties.Settings.Default.ChangeLanguage && !String.IsNullOrEmpty(Properties.Settings.Default.TargetLanguage))
+                if (Settings.Default.ChangeLanguage && !String.IsNullOrEmpty(Settings.Default.TargetLanguage))
                 {
                     ScriptManager.RunScript("Set-WinUILanguageOverride " + Properties.Settings.Default.TargetLanguage);
                 }
 
                 //The only other parameter Steam will send is the app AUMID
-                AppManager.LaunchUWPApp(Environment.GetCommandLineArgs()[1]);
+                AppManager.LaunchUWPApp(args);
 
                 //While the current launched app is running, sleep for n seconds and then check again
                 while (AppManager.IsRunning())
                 {
-                    Thread.Sleep(Properties.Settings.Default.Seconds * 1000);
+                    Thread.Sleep(Settings.Default.Seconds * 1000);
                 }
             }
             catch (Exception e)
@@ -100,7 +102,7 @@ namespace UWPHook
             }
             finally
             {
-                if (Properties.Settings.Default.ChangeLanguage && !String.IsNullOrEmpty(Properties.Settings.Default.TargetLanguage))
+                if (Settings.Default.ChangeLanguage && !String.IsNullOrEmpty(Settings.Default.TargetLanguage))
                 {
                     ScriptManager.RunScript("Set-WinUILanguageOverride " + currentLanguage);
                 }
@@ -136,17 +138,25 @@ namespace UWPHook
             await Task.Run(() =>
             {
                 WebClient client = new WebClient();
-                Stream stream = client.OpenRead(imageUrl);
-                Bitmap bitmap; bitmap = new Bitmap(stream);
-
-                if (bitmap != null)
+                Stream stream = null;
+                try
                 {
-                    bitmap.Save(destinationFilename, format);
+                    stream = client.OpenRead(imageUrl);
+                }
+                catch (Exception e)
+                {
+                    //Image with error?
+                    //Skip for now
                 }
 
-                stream.Flush();
-                stream.Close();
-                client.Dispose();
+                if (stream != null)
+                {
+                    Bitmap bitmap; bitmap = new Bitmap(stream);
+                    bitmap.Save(destinationFilename, format);
+                    stream.Flush();
+                    stream.Close();
+                    client.Dispose();
+                }
             });            
         }
 
@@ -154,6 +164,13 @@ namespace UWPHook
         {            
             string tmpGridDirectory = Path.GetTempPath() + "UWPHook\\tmp_grid\\";
             string userGridDirectory = user + "\\config\\grid\\";
+            
+            // No images were downloaded, maybe the key is invalid or no app had an image
+            if (!Directory.Exists(tmpGridDirectory))
+            {
+                return;
+            }
+            
             string[] images = Directory.GetFiles(tmpGridDirectory);
 
             if (!Directory.Exists(userGridDirectory))
@@ -171,7 +188,10 @@ namespace UWPHook
         private void RemoveTempGridImages()
         {
             string tmpGridDirectory = Path.GetTempPath() + "UWPHook\\tmp_grid\\";
-            Directory.Delete(tmpGridDirectory, true);
+            if (Directory.Exists(tmpGridDirectory))
+            {
+                Directory.Delete(tmpGridDirectory, true);
+            }
         }
 
         private async Task DownloadTempGridImages(string appName, string appTarget)
@@ -191,10 +211,10 @@ namespace UWPHook
                     Directory.CreateDirectory(tmpGridDirectory);
                 }
 
-                var gameGridsVertical = api.GetGameGrids(game.Id, "600x900", "static");
-                var gameGridsHorizontal = api.GetGameGrids(game.Id, "460x215", "static");
-                var gameHeroes = api.GetGameHeroes(game.Id, "static");
-                var gameLogos = api.GetGameLogos(game.Id, "static");
+                var gameGridsVertical = api.GetGameGrids(game.Id, "600x900,342x482,660x930");
+                var gameGridsHorizontal = api.GetGameGrids(game.Id, "460x215,920x430");
+                var gameHeroes = api.GetGameHeroes(game.Id);
+                var gameLogos = api.GetGameLogos(game.Id);
 
                 await Task.WhenAll(
                     gameGridsVertical,
@@ -235,13 +255,14 @@ namespace UWPHook
                 }
 
                 await Task.WhenAll(saveImagesTasks);
-
             }
         }
 
         private async Task ExportGames()
         {
+            string[] tags = Settings.Default.Tags.Split(',');
             string steam_folder = SteamManager.GetSteamFolder();
+
             if (Directory.Exists(steam_folder))
             {
                 var users = SteamManager.GetUsers(steam_folder);
@@ -283,7 +304,6 @@ namespace UWPHook
 
                         if (shortcuts != null)
                         {
-
                             foreach (var app in selected_apps)
                             {
                                 VDFEntry newApp = new VDFEntry()
@@ -299,7 +319,7 @@ namespace UWPHook
                                     IsHidden = 0,
                                     OpenVR = 0,
                                     ShortcutPath = "",
-                                    Tags = new string[0],
+                                    Tags = tags,
                                     Devkit = 0,
                                     DevkitGameID = "",
                                     LastPlayTime = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
@@ -443,14 +463,28 @@ namespace UWPHook
         public bool Contains(object o)
         {
             AppEntry appEntry = o as AppEntry;
-            //Return members whose Orders have not been filled
             return (appEntry.Aumid.ToLower().Contains(textBox.Text.ToLower()));
         }
 
-        private void HelpButton_Click(object sender, RoutedEventArgs e)
+        private void SettingsButton_Click(object sender, RoutedEventArgs e)
         {
             SettingsWindow window = new SettingsWindow();
             window.ShowDialog();
+        }
+
+        private void Window_Loaded(object sender, RoutedEventArgs e)
+        {
+            if (String.IsNullOrEmpty(Settings.Default.SteamGridDbApiKey) && !Settings.Default.OfferedSteamGridDB)
+            {
+                Settings.Default.OfferedSteamGridDB = true;
+                Settings.Default.Save();
+
+                var boxResult = MessageBox.Show("Do you want to automatically import grid images for imported games?", "UWPHook", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (boxResult == MessageBoxResult.Yes)
+                {
+                    SettingsButton_Click(this, null);
+                }
+            }
         }
     }
 }
