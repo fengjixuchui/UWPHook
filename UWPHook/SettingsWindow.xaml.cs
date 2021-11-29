@@ -1,6 +1,9 @@
 ﻿using System;
 using System.Globalization;
 using System.Windows;
+using System.Linq;
+using System.Runtime.InteropServices;
+//using System.Windows.Forms;
 
 namespace UWPHook
 {
@@ -20,7 +23,9 @@ namespace UWPHook
                 cultures_comboBox.Items.Add(culture.TextInfo.CultureName);
             }
 
-            for (int i = 1; i < 10; i++)
+
+            
+            for (int i = 0; i < 10; i++)
             {
                 seconds_comboBox.Items.Add(i + " seconds");
                 if (i == Properties.Settings.Default.Seconds)
@@ -46,7 +51,7 @@ namespace UWPHook
             Properties.Settings.Default.TargetLanguage = cultures_comboBox.SelectedItem.ToString();
             Properties.Settings.Default.Seconds = Int32.Parse(seconds_comboBox.SelectedItem.ToString().Substring(0, 1));
             Properties.Settings.Default.StreamMode = (bool)streaming_toggle.IsChecked;
-            Properties.Settings.Default.SteamGridDbApiKey = steamgriddb_api_key.Text;
+            Properties.Settings.Default.SteamGridDbApiKey = steamgriddb_api_key.Text.Trim('\r', '\n');
             Properties.Settings.Default.SelectedSteamGridDB_Style = style_comboBox.SelectedIndex;
             Properties.Settings.Default.SelectedSteamGridDB_Type = type_comboBox.SelectedIndex;
             Properties.Settings.Default.SelectedSteamGridDB_nfsw = nfsw_comboBox.SelectedIndex;
@@ -81,16 +86,25 @@ namespace UWPHook
             System.Diagnostics.Process.Start("https://reddit.com/r/UWPHook/");
         }
 
-        private void update_button_Copy_Click(object sender, RoutedEventArgs e)
+        private void clearAll_button_Click(object sender, RoutedEventArgs e)
         {
-            System.Diagnostics.Process.Start("https://github.com/BrianLima/OverFy/releases");
+            GamesWindow.ClearAllShortcuts();
         }
 
         private void key_Button_Click(object sender, RoutedEventArgs e)
         {
             MessageBox.Show(messageBoxText: "You are being redirected to SteamGridDB website!\r\n" +
                 "Log-in, or create your account, go to your profile preferences and click 'Generate API Key', then paste the key back on UWPHook.", "Attention!", MessageBoxButton.OK, MessageBoxImage.Information );
-            System.Diagnostics.Process.Start("https://www.steamgriddb.com/profile/preferences");
+            System.Diagnostics.Process.Start("https://www.steamgriddb.com/profile/preferences/api");
+        }
+
+        private void test()
+        {
+            FixHeight = 1280;
+
+            FixWidth = 1024;
+
+            Resolution.CResolution ChangeRes1024 = new Resolution.CResolution(FixHeight, FixWidth);
         }
     }
 }

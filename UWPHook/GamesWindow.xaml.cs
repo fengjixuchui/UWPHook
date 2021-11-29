@@ -1,8 +1,9 @@
-﻿using Force.Crc32;
+using Force.Crc32;
 using SharpSteam;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
@@ -31,17 +32,21 @@ namespace UWPHook
         public GamesWindow()
         {
             InitializeComponent();
+            Debug.WriteLine("Init GamesWindow");
             Apps = new AppEntryModel();
             var args = Environment.GetCommandLineArgs();
 
-            //If null or 1, the app was launched normally
-            if (args != null)
+            // If null or 1, the app was launched normally
+            if (args?.Length > 1)
             {
-                //When length is 1, the only argument is the path where the app is installed
-                if (Environment.GetCommandLineArgs().Length > 1)
-                {
-                    _ = LauncherAsync(args);
-                }
+                // When length is 1, the only argument is the path where the app is installed
+                 _ = LauncherAsync(args); // Launches the requested game
+
+            }
+            else
+            {
+                //auto refresh on load
+                LoadButton_Click(null, null);
             }
         }
 
@@ -54,6 +59,12 @@ namespace UWPHook
             await Task.Delay(10000);
         }
 
+        /// <summary>
+        /// Main task that launches a game
+        /// Usually invoked by steam
+        /// </summary>
+        /// <param name="args">launch args received from the program execution</param>
+        /// <returns></returns>
         private async Task LauncherAsync(string[] args)
         {
             FullScreenLauncher launcher = null;
@@ -112,6 +123,13 @@ namespace UWPHook
             }
         }
 
+        /// <summary>
+        /// Generates a CRC32 hash expected by Steam to link an image with a game in the library
+        /// See https://blog.yo1.dog/calculate-id-for-non-steam-games-js/ for an example
+        /// </summary>
+        /// <param name="appName">The name of the executable to be displayed</param>
+        /// <param name="appTarget">The executable target path</param>
+        /// <returns></returns>
         private UInt64 GenerateSteamGridAppId(string appName, string appTarget)
         {
             byte[] nameTargetBytes = Encoding.UTF8.GetBytes(appTarget + appName + "");
@@ -121,18 +139,53 @@ namespace UWPHook
             return gameId;
         }
 
+        /// <summary>
+        /// Task responsible for triggering the export, blocks the UI, and shows a message
+        /// once the task is finished, unlocking the UI
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
         private async void ExportButton_Click(object sender, RoutedEventArgs e)
         {
             grid.IsEnabled = false;
             progressBar.Visibility = Visibility.Visible;
 
-            await ExportGames();
+            bool result = false, restartSteam = true;
+            string msg = String.Empty;
+
+            try
+            {
+                await ExportGames(restartSteam);
+
+                msg = "Your apps were successfuly exported!";
+                if(!restartSteam)
+                {
+                    msg += " Please restart Steam in order to see them.";
+                }
+                else if(result)
+                {
+                    msg += " Steam has been restarted.";
+                }
+
+            }
+            catch (TaskCanceledException exception)
+            {
+                msg = exception.Message;
+            }
 
             grid.IsEnabled = true;
             progressBar.Visibility = Visibility.Collapsed;
-            MessageBox.Show("Your apps were successfuly exported, please restart Steam in order to see your apps.", "UWPHook", MessageBoxButton.OK, MessageBoxImage.Information);
+
+            MessageBox.Show(msg, "UWPHook", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
+        /// <summary>
+        /// Downloads the given image in the url to a given path in a given format
+        /// </summary>
+        /// <param name="imageUrl">The url for the image</param>
+        /// <param name="destinationFilename">Path to store the image</param>
+        /// <param name="format"></param>
+        /// <returns></returns>
         private async Task SaveImage(string imageUrl, string destinationFilename, ImageFormat format)
         {
             await Task.Run(() =>
@@ -160,6 +213,10 @@ namespace UWPHook
             });            
         }
 
+        /// <summary>
+        /// Copies all temporary images to the given user
+        /// </summary>
+        /// <param name="user">The user path to copy images to</param>
         private void CopyTempGridImagesToSteamUser(string user)
         {            
             string tmpGridDirectory = Path.GetTempPath() + "UWPHook\\tmp_grid\\";
@@ -194,16 +251,33 @@ namespace UWPHook
             }
         }
 
+        /// <summary>
+        /// Task responsible for downloading grid images to a temporary location,
+        /// generates the steam ID for the game based in the receiving parameters,
+        /// Throws TaskCanceledException if cannot communicate with SteamGridDB properly
+        /// </summary>
+        /// <param name="appName">The name of the app</param>
+        /// <param name="appTarget">The target path of the executable</param>
+        /// <returns></returns>
         private async Task DownloadTempGridImages(string appName, string appTarget)
         {
             SteamGridDbApi api = new SteamGridDbApi(Properties.Settings.Default.SteamGridDbApiKey);
             string tmpGridDirectory = Path.GetTempPath() + "UWPHook\\tmp_grid\\";
+            GameResponse[] games;
 
-            var games = await api.SearchGame(appName);
-
+            try
+            {
+                games = await api.SearchGame(appName);
+            }
+            catch (TaskCanceledException exception)
+            {
+                throw;
+            }
+            
             if (games != null)
             {
                 var game = games[0];
+                Debug.WriteLine("Detected Game: " + game.ToString());
                 UInt64 gameId = GenerateSteamGridAppId(appName, appTarget);
 
                 if (!Directory.Exists(tmpGridDirectory))
@@ -215,6 +289,8 @@ namespace UWPHook
                 var gameGridsHorizontal = api.GetGameGrids(game.Id, "460x215,920x430");
                 var gameHeroes = api.GetGameHeroes(game.Id);
                 var gameLogos = api.GetGameLogos(game.Id);
+
+                Debug.WriteLine("Game ID: " + game.Id);
 
                 await Task.WhenAll(
                     gameGridsVertical,
@@ -258,7 +334,12 @@ namespace UWPHook
             }
         }
 
-        private async Task ExportGames()
+        /// <summary>
+        /// Main Task to export the selected games to steam
+        /// </summary>
+        /// <param name="restartSteam"></param>
+        /// <returns></returns>
+        private async Task<bool> ExportGames(bool restartSteam)
         {
             string[] tags = Settings.Default.Tags.Split(',');
             string steam_folder = SteamManager.GetSteamFolder();
@@ -272,18 +353,23 @@ namespace UWPHook
 
                 List<Task> gridImagesDownloadTasks = new List<Task>();
                 bool downloadGridImages = !String.IsNullOrEmpty(Properties.Settings.Default.SteamGridDbApiKey);
-
                 //To make things faster, decide icons and download grid images before looping users
+                Debug.WriteLine("downloadGridImages: " + (downloadGridImages));
+
                 foreach (var app in selected_apps)
                 {
                     app.Icon = app.widestSquareIcon();
 
                     if (downloadGridImages)
                     {
+                        Debug.WriteLine("Downloading grid images for app " + app.Name);
+
                         gridImagesDownloadTasks.Add(DownloadTempGridImages(app.Name, exePath));
                     }
                 }
 
+                // Export the selected apps and the downloaded images to each user
+                // in the steam folder by modifying it's VDF file
                 foreach (var user in users)
                 {
                     try
@@ -324,10 +410,27 @@ namespace UWPHook
                                     DevkitGameID = "",
                                     LastPlayTime = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                                 };
+                                Boolean isFound = false;
+                                for (int i = 0; i < shortcuts.Length; i++)
+                                {
+                                    Debug.WriteLine(shortcuts[i].ToString());
+                                    
 
-                                //Resize this array so it fits the new entries
-                                Array.Resize(ref shortcuts, shortcuts.Length + 1);
-                                shortcuts[shortcuts.Length - 1] = newApp;
+                                    if (shortcuts[i].AppName == app.Name)
+                                    {
+                                        isFound = true;
+                                        Debug.WriteLine(app.Name + " already added to Steam. Updating existing shortcut.");
+                                        shortcuts[i] = newApp;
+                                    }
+                                }
+
+                                if (!isFound)
+                                {
+                                    //Resize this array so it fits the new entries
+                                    Array.Resize(ref shortcuts, shortcuts.Length + 1);
+                                    shortcuts[shortcuts.Length - 1] = newApp;
+                                }
+                                
                             }
 
                             try
@@ -366,8 +469,100 @@ namespace UWPHook
                     });
                 }
             }
+
+            if(restartSteam)
+            {
+                Func<Process> getSteam = () => Process.GetProcessesByName("steam").SingleOrDefault();
+
+                Process steam = getSteam();
+                if (steam != null)
+                {
+                    string steamExe = steam.MainModule.FileName;
+
+                    //we always ask politely
+                    Debug.WriteLine("Requesting Steam shutdown");
+                    Process.Start(steamExe, "-exitsteam");
+
+                    bool restarted = false;
+                    Stopwatch watch = new Stopwatch();
+                    watch.Start();
+
+                    //give it N seconds to sort itself out
+                    int waitSeconds = 8;
+                    while (watch.Elapsed.TotalSeconds < waitSeconds)
+                    {
+                        Thread.Sleep(TimeSpan.FromSeconds(0.5f));
+                        if (getSteam() == null)
+                        {
+                            Debug.WriteLine("Restarting Steam");
+                            Process.Start(steamExe);
+                            restarted = true;
+                            break;
+                        }
+                    }
+
+                    if (!restarted)
+                    {
+                        Debug.WriteLine("Steam instance not restarted");
+                        MessageBox.Show("Failed to restart Steam, please launch it manually", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return false;
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine("Steam instance not found to be restarted");
+                }
+            }
+
+            return true;
         }
 
+        public static void ClearAllShortcuts()
+        {
+            Debug.WriteLine("DBG: Clearing all elements in shortcuts.vdf");
+            string[] tags = Settings.Default.Tags.Split(',');
+            string steam_folder = SteamManager.GetSteamFolder();
+
+            if (Directory.Exists(steam_folder))
+            {
+                var users = SteamManager.GetUsers(steam_folder);
+                var exePath = @"""" + System.Reflection.Assembly.GetExecutingAssembly().Location + @"""";
+                var exeDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+
+                foreach (var user in users)
+                {
+                    try
+                    {
+                        VDFEntry[] shortcuts = new VDFEntry[0];
+
+                        try
+                        {
+                            if (!Directory.Exists(user + @"\\config\\"))
+                            {
+                                Directory.CreateDirectory(user + @"\\config\\");
+                            }
+                            //Write the file with all the shortcuts
+                            File.WriteAllBytes(user + @"\\config\\shortcuts.vdf", VDFSerializer.Serialize(shortcuts));
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new Exception("Error: Program failed while trying to write your Steam shortcuts" + Environment.NewLine + ex.Message);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show("Error: Program failed while trying to clear your Steam shortcuts:" + Environment.NewLine + ex.Message + ex.StackTrace);
+                    }
+                }
+                MessageBox.Show("All non-Steam shortcuts has been cleared.");
+            }
+        }
+
+        /// <summary>
+        /// Fires the Bwr_DoWork, to load the apps installed at the machine
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
         private void LoadButton_Click(object sender, RoutedEventArgs e)
         {
             bwrLoad = new BackgroundWorker();
@@ -375,12 +570,19 @@ namespace UWPHook
             bwrLoad.RunWorkerCompleted += Bwr_RunWorkerCompleted;
 
             grid.IsEnabled = false;
+            label.Content = "Loading your installed apps";
+
             progressBar.Visibility = Visibility.Visible;
             Apps.Entries = new System.Collections.ObjectModel.ObservableCollection<AppEntry>();
 
             bwrLoad.RunWorkerAsync();
         }
 
+        /// <summary>
+        /// Callback for restoring the grid list interactivity
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
         private void Bwr_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
             listGames.ItemsSource = Apps.Entries;
@@ -393,6 +595,11 @@ namespace UWPHook
             label.Content = "Installed Apps";
         }
 
+        /// <summary>
+        /// Worker responsible for loading the apps installed in the machine
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
         private void Bwr_DoWork(object sender, DoWorkEventArgs e)
         {
             try
@@ -417,6 +624,12 @@ namespace UWPHook
                     //Remove end lines from the String and split both values, I split the appname and the AUMID using |
                     //I hope no apps have that in their name. Ever.
                     var values = app.Replace("\r\n", "").Split('|');
+
+                    if (values.Length >= 3 && AppManager.IsKnownApp(values[2], out string readableName))
+                    {
+                        values[0] = readableName;
+                    }
+
                     if (!String.IsNullOrWhiteSpace(values[0]))
                     {
                         //We get the default square tile to find where the app stores it's icons, then we resolve which one is the widest
@@ -425,17 +638,6 @@ namespace UWPHook
                         {
                             Apps.Entries.Add(new AppEntry() { Name = values[0], IconPath = logosPath, Aumid = values[2], Selected = false });
                         });
-                    }
-                    if (values.Length > 2)
-                    {
-                        if (values[2].Contains("Microsoft.SeaofThieves"))
-                        {
-                            values[0] = "Sea of Thieves";
-                        }
-                        else if (values[2].Contains("Microsoft.DeltaPC"))
-                        {
-                            values[0] = "Gears of War: Ultimate Edition";
-                        }
                     }
                 }
             }
@@ -463,7 +665,7 @@ namespace UWPHook
         public bool Contains(object o)
         {
             AppEntry appEntry = o as AppEntry;
-            return (appEntry.Aumid.ToLower().Contains(textBox.Text.ToLower()));
+            return (appEntry.Aumid.ToLower().Contains(textBox.Text.ToLower()) || appEntry.Name.ToLower().Contains(textBox.Text.ToLower()));
         }
 
         private void SettingsButton_Click(object sender, RoutedEventArgs e)
@@ -472,6 +674,13 @@ namespace UWPHook
             window.ShowDialog();
         }
 
+        /// <summary>
+        /// Function that executes when the Games Window is loaded
+        /// Will inform the user of the possibility of using the SteamGridDB API
+        /// redirecting him to the settings page if he wishes to use the functionality
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
             if (String.IsNullOrEmpty(Settings.Default.SteamGridDbApiKey) && !Settings.Default.OfferedSteamGridDB)
