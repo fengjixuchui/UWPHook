@@ -155,7 +155,8 @@ namespace UWPHook
 
             try
             {
-                await ExportGames(restartSteam);
+                await ExportGames();
+                await RestartSteam(restartSteam);
 
                 msg = "Your apps were successfuly exported!";
                 if(!restartSteam)
@@ -339,7 +340,7 @@ namespace UWPHook
         /// </summary>
         /// <param name="restartSteam"></param>
         /// <returns></returns>
-        private async Task<bool> ExportGames(bool restartSteam)
+        private async Task<bool> ExportGames()
         {
             string[] tags = Settings.Default.Tags.Split(',');
             string steam_folder = SteamManager.GetSteamFolder();
@@ -392,6 +393,8 @@ namespace UWPHook
                         {
                             foreach (var app in selected_apps)
                             {
+                                string icon = PersistAppIcon(app);
+
                                 VDFEntry newApp = new VDFEntry()
                                 {
                                     AppName = app.Name,
@@ -400,7 +403,7 @@ namespace UWPHook
                                     LaunchOptions = app.Aumid,
                                     AllowDesktopConfig = 1,
                                     AllowOverlay = 1,
-                                    Icon = app.Icon,
+                                    Icon = icon,
                                     Index = shortcuts.Length,
                                     IsHidden = 0,
                                     OpenVR = 0,
@@ -430,7 +433,6 @@ namespace UWPHook
                                     Array.Resize(ref shortcuts, shortcuts.Length + 1);
                                     shortcuts[shortcuts.Length - 1] = newApp;
                                 }
-                                
                             }
 
                             try
@@ -470,48 +472,77 @@ namespace UWPHook
                 }
             }
 
-            if(restartSteam)
+            return true;
+        }
+
+        /// <summary>
+        /// Copies an apps icon to a intermediate location
+        /// Due to some apps changing the icon location when they update, which causes icons to be "lost"
+        /// </summary>
+        /// <param name="app">App to copy the icon from</param>
+        /// <returns></returns>
+        private string PersistAppIcon(AppEntry app)
+        {
+            string path = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            string icons_path = path + @"\\Briano\\UWPHook\\icons\\";
+
+            if (!Directory.Exists(icons_path))
             {
-                Func<Process> getSteam = () => Process.GetProcessesByName("steam").SingleOrDefault();
+                Directory.CreateDirectory(icons_path);
+            }
 
-                Process steam = getSteam();
-                if (steam != null)
+            string destFile = String.Join(String.Empty, icons_path+ @"\\", app.Aumid + Path.GetFileName(app.Icon));
+            File.Copy(app.Icon, destFile, true);
+
+            return destFile;
+        }
+
+        /// <summary>
+        /// Restarts the Steam.exe process
+        /// </summary>
+        /// <param name="restartSteam"></param>
+        /// <returns></returns>
+        private async Task<bool> RestartSteam(bool restartSteam)
+        {
+            Func<Process> getSteam = () => Process.GetProcessesByName("steam").SingleOrDefault();
+            Process steam = getSteam();
+
+            if (steam != null)
+            {
+                string steamExe = steam.MainModule.FileName;
+
+                //we always ask politely
+                Debug.WriteLine("Requesting Steam shutdown");
+                Process.Start(steamExe, "-exitsteam");
+
+                bool restarted = false;
+                Stopwatch watch = new Stopwatch();
+                watch.Start();
+
+                //give it N seconds to sort itself out
+                int waitSeconds = 8;
+                while (!restarted || watch.Elapsed.TotalSeconds < waitSeconds)
                 {
-                    string steamExe = steam.MainModule.FileName;
-
-                    //we always ask politely
-                    Debug.WriteLine("Requesting Steam shutdown");
-                    Process.Start(steamExe, "-exitsteam");
-
-                    bool restarted = false;
-                    Stopwatch watch = new Stopwatch();
-                    watch.Start();
-
-                    //give it N seconds to sort itself out
-                    int waitSeconds = 8;
-                    while (watch.Elapsed.TotalSeconds < waitSeconds)
+                    await Task.Delay(TimeSpan.FromSeconds(0.5f));
+                    if (getSteam() == null)
                     {
-                        Thread.Sleep(TimeSpan.FromSeconds(0.5f));
-                        if (getSteam() == null)
-                        {
-                            Debug.WriteLine("Restarting Steam");
-                            Process.Start(steamExe);
-                            restarted = true;
-                            break;
-                        }
-                    }
-
-                    if (!restarted)
-                    {
-                        Debug.WriteLine("Steam instance not restarted");
-                        MessageBox.Show("Failed to restart Steam, please launch it manually", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                        return false;
+                        Debug.WriteLine("Restarting Steam");
+                        Process.Start(steamExe);
+                        restarted = true;
+                        break;
                     }
                 }
-                else
+
+                if (!restarted)
                 {
-                    Debug.WriteLine("Steam instance not found to be restarted");
+                    Debug.WriteLine("Steam instance not restarted");
+                    MessageBox.Show("Failed to restart Steam, please launch it manually", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return false;
                 }
+            }
+            else
+            {
+                Debug.WriteLine("Steam instance not found to be restarted");
             }
 
             return true;
@@ -683,8 +714,9 @@ namespace UWPHook
         /// <param name="e"></param>
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
-            if (String.IsNullOrEmpty(Settings.Default.SteamGridDbApiKey) && !Settings.Default.OfferedSteamGridDB)
+            if (!Settings.Default.OfferedSteamGridDB)
             {
+                Settings.Default.SteamGridDbApiKey = "";
                 Settings.Default.OfferedSteamGridDB = true;
                 Settings.Default.Save();
 
